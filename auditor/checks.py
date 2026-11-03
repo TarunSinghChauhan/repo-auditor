@@ -26,6 +26,19 @@ _SECRET_PATTERNS = [
     ("Slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}")),
 ]
 
+_ENV_TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist")
+
+_METRIC_HEADING = re.compile(
+    r"performance|metric|result|benchmark|evaluation|accuracy|latency", re.IGNORECASE)
+_NUMBER_CLAIM = re.compile(
+    r"\d+(?:\.\d+)?\s?%|\d+(?:\.\d+)?\s?(?:ms|req/s|qps|x)|(?<![\d.])0\.\d{2,}",
+    re.IGNORECASE)
+_HEDGE = re.compile(
+    r"not (?:yet )?(?:been )?measured|illustrative|placeholder|example numbers|synthetic|to be measured",
+    re.IGNORECASE)
+_EVIDENCE_DIRS = {"results", "benchmarks", "evals", "eval", "reports", "metrics", "mlruns", "runs"}
+_EVIDENCE_FILE = re.compile(
+    r"(\.ipynb$)|((result|metric|benchmark|eval)[^/]*\.(json|csv|md|txt|html)$)", re.IGNORECASE)
 _SOURCE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java"}
 _TEST_FILE = re.compile(r"(^test_.*\.py$)|(_test\.py$)|(\.(test|spec)\.[jt]sx?$)|(_test\.go$)")
 
@@ -85,7 +98,7 @@ def check_secrets(repo: Repo) -> list:
     findings = []
     for path in repo.files():
         name = _name(path).lower()
-        if name == ".env" or (name.startswith(".env.") and name not in {".env.example", ".env.sample", ".env.template"}):
+        if name == ".env" or (name.startswith(".env.") and not name.endswith(_ENV_TEMPLATE_SUFFIXES)):
             findings.append(Finding("secret", "high", path, "Environment file is tracked in git"))
             continue
         text = repo.read_text(path)
@@ -139,6 +152,52 @@ def check_pinned_requirements(repo: Repo) -> list:
     return findings
 
 
+def _metric_sections(text: str) -> list:
+    """(heading, first line number, body lines) for each README section whose
+    title suggests it reports measurements. A section ends at the next heading
+    of the same or a higher level."""
+    lines = text.splitlines()
+    sections = []
+    for index, line in enumerate(lines):
+        match = re.match(r"(#{1,6})\s+(.*)", line)
+        if not match or not _METRIC_HEADING.search(match.group(2)):
+            continue
+        level = len(match.group(1))
+        if level == 1:
+            continue  # the README title covers the whole file, not one section
+        body = []
+        for later in lines[index + 1:]:
+            nxt = re.match(r"(#{1,6})\s", later)
+            if nxt and len(nxt.group(1)) <= level:
+                break
+            body.append(later)
+        sections.append((match.group(2).strip(), index + 1, body))
+    return sections
+
+
+def check_unsupported_metrics(repo: Repo) -> list:
+    """Numbers in a results-style README section with nothing in the repo to back them."""
+    files = repo.files()
+    has_results = any(
+        _EVIDENCE_DIRS.intersection(PurePosixPath(p).parts[:-1]) or _EVIDENCE_FILE.search(p)
+        for p in files
+    )
+    findings = []
+    for path in _readmes(repo):
+        for heading, number, body in _metric_sections(repo.read_text(path) or ""):
+            text = "\n".join(body)
+            claims = [ln for ln in body if _NUMBER_CLAIM.search(ln)]
+            if len(claims) < 2 or _HEDGE.search(text):
+                continue
+            if has_results or any(f in text for f in files if "/" in f or f.endswith((".py", ".json"))):
+                continue
+            findings.append(Finding(
+                "unsupported-metrics", "medium", path,
+                f"Section {heading!r} reports {len(claims)} figures, but the repo has no "
+                "results file, notebook or script reference that produces them", number))
+    return findings
+
+
 def check_license(repo: Repo) -> list:
     for path in repo.files():
         if "/" not in path and _name(path).lower().startswith(("license", "licence", "copying")):
@@ -153,5 +212,6 @@ CHECKS = [
     check_secrets,
     check_tests,
     check_pinned_requirements,
+    check_unsupported_metrics,
     check_license,
 ]
