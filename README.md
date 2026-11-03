@@ -20,6 +20,7 @@ It reads `git ls-files` when the path is a git repository (so ignored files are 
 | readme | medium / low | missing README; README under 200 characters |
 | placeholder-text | medium | placeholder clone URLs and filler text left in the README |
 | junk-file | medium | `.DS_Store`, `.log`, `.pyc`, `__pycache__`, `daily-notes.md`-style scratch files |
+| unsupported-metrics | medium | a results-style README section full of figures (accuracy, latency, %) with no results file, notebook or script in the repo to back them |
 | tests | medium | source code with no tests |
 | unpinned-dependency | low | `requirements*.txt` lines with no version constraint |
 | license | low | no LICENSE file |
